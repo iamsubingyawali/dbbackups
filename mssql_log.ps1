@@ -10,9 +10,8 @@
 # 1. All the spaces, underscores and dashes in database names will be removed on backup directory name and backup file name
 # 2. All directory paths should be specified as absolute paths without trailing slashes
 # 3. User should specify backup type while calling the script, otherwise full backup will be performed
-# 4. The name of the audit backup should follow the pattern: Audit<DBNAME>. DBNAME should have no spaces, dashes or underscores
-# 5. The audit folder location should be specified under audit backup settings
-# 6. To upload backups to google drive, this script uses 'gdrive' tool which needs to be installed and confiugured before running this script
+# 4. The audit folder location should be specified under audit backup settings
+# 5. To upload backups to google drive, this script uses 'gdrive' tool which needs to be installed and confiugured before running this script
     # It is available at: https://github.com/glotlabs/gdrive
     # Step 1: Download executable from releases section
     # Step 2: Put executable file somewhere and add that location to system path
