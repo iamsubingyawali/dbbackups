@@ -3,7 +3,7 @@
 # Script to perform full, diff and audit backup of SQL Server databases
 # This script can also send the backup details to a remote SQL Server database
 # Accepts positional arguments: full, diff or audit
-# Author: Subin Gyawali
+# Author: Subin Gyawali (@iamsubingyawali)
 
 # Usage: sqlbackup.sh [full|diff|audit]
 

@@ -1,6 +1,6 @@
 # Script to perform full, diff and audit backup of SQL Server databases
 # Accepts positional arguments: full, diff or audit
-# Author: Subin Gyawali
+# Author: Subin Gyawali (@iamsubingyawali)
 
 # Usage: sqlbackup.ps1 [full|diff|audit]
 
@@ -16,13 +16,12 @@
     # Step 1: Download executable from releases section
     # Step 2: Put executable file somewhere and add that location to system path
     # Step 4: Follow provided guide on readme file to generate OAuth credentials and add an account
-# 7. 7Zip Powershell module must be installed to compress backups - Run: Install-Module -Name 7Zip4Powershell
 
 # List of Databases and respective S3 buckets
 # If S3 bucket sync is not required, set an empty string in place of bucket path
 $DATABASES = @{
-    "TestDB1" = "db-backup/TestDB1"
-    "TestDB2" = "db-backup/TestDB2"
+    "TestDB1" = "db-backup/TEST"
+    "TestDB2" = "db-backup/TEST2"
 }
 
 # Common Settings
@@ -62,7 +61,7 @@ if ($TYPE -eq "full") {
 elseif ($TYPE -eq "audit") {
     # Audit backup settings
     $RETENTION_DAYS = "6"
-    $AUDIT_BASE_FOLDER="/Program Files/Microsoft SQL Server/MSSQL14.SQLEXPRESS/MSSQL/DATA"
+    $AUDIT_FOLDER="/Program Files/Microsoft SQL Server/MSSQL14.SQLEXPRESS/MSSQL/DATA"
     $BACKUP_BASE_DIR = "/Backups/AuditSQLBackups"
     $LOG_BASE_DIR = "/Backups/SQLBackupLogs"
 }
@@ -77,6 +76,11 @@ else {
 New-Item -ItemType Directory -Path $BACKUP_BASE_DIR -Force | Out-Null
 New-Item -ItemType Directory -Path $LOG_BASE_DIR -Force | Out-Null
 
+# Check if 7Zip4Powershell module is installed and Install if not
+if(!(Get-Module -ListAvailable -Name 7Zip4Powershell)){
+    Install-Module -Name 7Zip4Powershell -Confirm:$False -Force
+}
+
 if ($TYPE -eq "full"){
     foreach ($DB in $DATABASES.Keys) {
         # Get clean db name (replaces _, - and space with nothing)
@@ -90,13 +94,13 @@ if ($TYPE -eq "full"){
         # Get full backup directory path
         $BACKUP_DIR = Convert-Path $BACKUP_DIR
         # Backup database
-        sqlcmd -S "$MSSQL_HOST,$MSSQL_PORT" -U $MSSQL_USER -P $MSSQL_PASS -Q "BACKUP DATABASE [$DB] TO DISK = N'$BACKUP_DIR/$FILE_NAME.bak' WITH NOFORMAT, NOINIT, SKIP, NOREWIND, STATS=10" | Out-File -Append "$LOG_BASE_DIR/mssql_full_backup.log"
-        Compress-7Zip -Path "$BACKUP_DIR/$FILE_NAME.bak" -ArchiveFileName "$FILE_NAME.zip" -OutputPath "$BACKUP_DIR" | Out-File -Append "$LOG_BASE_DIR/mssql_full_backup.log"
+        sqlcmd -S $MSSQL_HOST,$MSSQL_PORT -U $MSSQL_USER -P $MSSQL_PASS -Q "BACKUP DATABASE [$DB] TO DISK = N'$BACKUP_DIR/$FILE_NAME.bak' WITH NOFORMAT, NOINIT, SKIP, NOREWIND, STATS=10" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_full_backup.log"
+        Compress-7Zip -Path "$BACKUP_DIR/$FILE_NAME.bak" -ArchiveFileName "$FILE_NAME.zip" -OutputPath "$BACKUP_DIR" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_full_backup.log"
         Remove-Item "$BACKUP_DIR/$FILE_NAME.bak" | Out-Null
         # Sync to S3
         $S3_BUCKET_NAME = $DATABASES[$DB]
         if ($S3_BUCKET_NAME -ne "" -and $SYNC_TO_S3) {
-            aws s3 sync $BACKUP_DIR "s3://$S3_BUCKET_NAME" | Out-File -Append "$LOG_BASE_DIR/mssql_full_backup.log"
+            aws s3 sync $BACKUP_DIR "s3://$S3_BUCKET_NAME" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_full_backup.log"
         }
         # Sync to Google Drive
         if ($SYNC_TO_GDRIVE) {
@@ -108,10 +112,10 @@ if ($TYPE -eq "full"){
             else {
                 $DRIVE_BACKUP_FOLDER = $DRIVE_BACKUP_FOLDER.Split("#_#_#")[0]
             }
-            gdrive files upload "$BACKUP_DIR/$FILE_NAME.zip" --parent $DRIVE_BACKUP_FOLDER  | Out-File -Append "$LOG_BASE_DIR/mssql_full_backup.log"
+            gdrive files upload "$BACKUP_DIR/$FILE_NAME.zip" --parent $DRIVE_BACKUP_FOLDER  | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_full_backup.log"
         }
         # Add log
-        "## $TIMESTAMP FULL BACKUP SUCCESSFUL FOR $DB." | Out-File -Append "$LOG_BASE_DIR/mssql_full_backup.log"
+        "## $TIMESTAMP FULL BACKUP SUCCESSFUL FOR $DB." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_full_backup.log"
         # Remove old files
         Get-ChildItem $BACKUP_BASE_DIR/$CLEAN_DB_NAME | Where-Object {
             $_.LastWriteTime -lt (Get-Date).AddDays(-$RETENTION_DAYS)
@@ -124,7 +128,6 @@ if ($TYPE -eq "full"){
 elseif ($TYPE -eq "audit") {
     foreach ($DB in $DATABASES.Keys) {
         # Check if audit exists
-        $AUDIT_FOLDER = $AUDIT_BASE_FOLDER + "/Audit" + ($DB -replace "[ _-]")
         if (Test-Path $AUDIT_FOLDER) {
             # Get clean db name (replaces _, - and space with nothing)
             $CLEAN_DB_NAME = $DB -replace "[ _-]"
@@ -137,10 +140,10 @@ elseif ($TYPE -eq "audit") {
             # Get full backup directory path
             $BACKUP_DIR = Convert-Path $BACKUP_DIR
             # Zip and move audit folder
-            Compress-7Zip -Path ($AUDIT_BASE_FOLDER + "/Audit" + ($DB -replace "[ _-]")) -ArchiveFileName "$FILE_NAME.zip" -OutputPath "$BACKUP_DIR" | Out-File -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
+            Compress-7Zip -Path $AUDIT_FOLDER -ArchiveFileName "$FILE_NAME.zip" -OutputPath "$BACKUP_DIR" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
             # Sync to S3
             if ($DATABASES[$DB] -ne "" -and $SYNC_TO_S3) {
-                aws s3 sync $BACKUP_DIR "s3://${DATABASES[$DB]}" | Out-File -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
+                aws s3 sync $BACKUP_DIR "s3://${DATABASES[$DB]}" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
             }
             # Sync to Google Drive
             if ($SYNC_TO_GDRIVE) {
@@ -152,16 +155,16 @@ elseif ($TYPE -eq "audit") {
                 else {
                     $DRIVE_BACKUP_FOLDER = $DRIVE_BACKUP_FOLDER.Split("#_#_#")[0]
                 }
-                gdrive files upload "$BACKUP_DIR/$FILE_NAME.zip" --parent $DRIVE_BACKUP_FOLDER  | Out-File -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
+                gdrive files upload "$BACKUP_DIR/$FILE_NAME.zip" --parent $DRIVE_BACKUP_FOLDER  | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
             }
             # Add log
-            "## $TIMESTAMP AUDIT BACKUP SUCCESSFUL FOR $DB." | Out-File -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
+            "## $TIMESTAMP AUDIT BACKUP SUCCESSFUL FOR $DB." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
             # Remove old files
             Get-ChildItem $BACKUP_BASE_DIR/$CLEAN_DB_NAME | Where-Object { 
                 $_.LastWriteTime -lt (Get-Date).AddDays(-$RETENTION_DAYS) 
             } | Remove-Item -Recurse -Force
         } else {
-            "## $TIMESTAMP NO DATABASE AUDIT FOUND FOR $DB." | Out-File -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
+            "## $TIMESTAMP NO DATABASE AUDIT FOUND FOR $DB." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
         }
     }
     # Remove old log texts
@@ -181,11 +184,11 @@ else {
         # Get full backup directory path
         $BACKUP_DIR = Convert-Path $BACKUP_DIR
         # Backup Database
-        sqlcmd -S "$MSSQL_HOST,$MSSQL_PORT" -U $MSSQL_USER -P $MSSQL_PASS -Q "BACKUP DATABASE [$DB] TO DISK = N'$BACKUP_DIR/$FILE_NAME.bak' WITH DIFFERENTIAL, NOFORMAT, NOINIT, SKIP, NOREWIND, STATS=10" | Out-File -Append "$LOG_BASE_DIR/mssql_diff_backup.log"
-        Compress-7Zip -Path "$BACKUP_DIR/$FILE_NAME.bak" -ArchiveFileName "$FILE_NAME.zip" -OutputPath "$BACKUP_DIR" | Out-File -Append "$LOG_BASE_DIR/mssql_diff_backup.log"
+        sqlcmd -S $MSSQL_HOST,$MSSQL_PORT -U $MSSQL_USER -P $MSSQL_PASS -Q "BACKUP DATABASE [$DB] TO DISK = N'$BACKUP_DIR/$FILE_NAME.bak' WITH DIFFERENTIAL, NOFORMAT, NOINIT, SKIP, NOREWIND, STATS=10" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_diff_backup.log"
+        Compress-7Zip -Path "$BACKUP_DIR/$FILE_NAME.bak" -ArchiveFileName "$FILE_NAME.zip" -OutputPath "$BACKUP_DIR" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_diff_backup.log"
         Remove-Item "$BACKUP_DIR/$FILE_NAME.bak" | Out-Null
         # Add log
-        "## $TIMESTAMP DIFFERENTIAL BACKUP SUCCESSFUL FOR $DB." | Out-File -Append "$LOG_BASE_DIR/mssql_diff_backup.log"
+        "## $TIMESTAMP DIFFERENTIAL BACKUP SUCCESSFUL FOR $DB." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_diff_backup.log"
         # Remove old files
         Get-ChildItem $BACKUP_BASE_DIR/$CLEAN_DB_NAME | Where-Object { 
             $_.LastWriteTime -lt (Get-Date).AddDays(-$RETENTION_DAYS) 
