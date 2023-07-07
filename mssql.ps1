@@ -9,12 +9,14 @@
 # 1. All the spaces, underscores and dashes in database names will be removed on backup directory name and backup file name
 # 2. All directory paths should be specified as absolute paths without trailing slashes
 # 3. User should specify backup type while calling the script, otherwise full backup will be performed
-# 4. The audit folder location should be specified under audit backup settings
-# 5. To upload backups to google drive, this script uses 'gdrive' tool which needs to be installed and confiugured before running this script
+# 4. The name of the audit backup should follow the pattern: Audit<DBNAME>. DBNAME should have no spaces, dashes or underscores
+# 5. The audit folder location should be specified under audit backup settings
+# 6. To upload backups to google drive, this script uses 'gdrive' tool which needs to be installed and confiugured before running this script
     # It is available at: https://github.com/glotlabs/gdrive
     # Step 1: Download executable from releases section
     # Step 2: Put executable file somewhere and add that location to system path
     # Step 4: Follow provided guide on readme file to generate OAuth credentials and add an account
+# 7. 7Zip Powershell module must be installed to compress backups - Run: Install-Module -Name 7Zip4Powershell
 
 # List of Databases and respective S3 buckets
 # If S3 bucket sync is not required, set an empty string in place of bucket path
@@ -60,7 +62,7 @@ if ($TYPE -eq "full") {
 elseif ($TYPE -eq "audit") {
     # Audit backup settings
     $RETENTION_DAYS = "6"
-    $AUDIT_FOLDER="/Program Files/Microsoft SQL Server/MSSQL14.SQLEXPRESS/MSSQL/DATA"
+    $AUDIT_BASE_FOLDER="/Program Files/Microsoft SQL Server/MSSQL14.SQLEXPRESS/MSSQL/DATA"
     $BACKUP_BASE_DIR = "/Backups/AuditSQLBackups"
     $LOG_BASE_DIR = "/Backups/SQLBackupLogs"
 }
@@ -75,11 +77,15 @@ else {
 New-Item -ItemType Directory -Path $BACKUP_BASE_DIR -Force | Out-Null
 New-Item -ItemType Directory -Path $LOG_BASE_DIR -Force | Out-Null
 
-# Check if 7Zip4Powershell module is installed and Install if not
-if(!(Get-Module -ListAvailable -Name 7Zip4Powershell)){
-    Install-Module -Name 7Zip4Powershell -Confirm:$False -Force
+# Check if server port is available and create connection string
+if($MSSQL_PORT -ne ""){
+    $MSSQL_CONN_STRING = "$MSSQL_HOST,$MSSQL_PORT"
+}
+else{
+    $MSSQL_CONN_STRING = $MSSQL_HOST
 }
 
+# Perform backups
 if ($TYPE -eq "full"){
     foreach ($DB in $DATABASES.Keys) {
         # Get clean db name (replaces _, - and space with nothing)
@@ -93,7 +99,7 @@ if ($TYPE -eq "full"){
         # Get full backup directory path
         $BACKUP_DIR = Convert-Path $BACKUP_DIR
         # Backup database
-        sqlcmd -S $MSSQL_HOST,$MSSQL_PORT -U $MSSQL_USER -P $MSSQL_PASS -Q "BACKUP DATABASE [$DB] TO DISK = N'$BACKUP_DIR/$FILE_NAME.bak' WITH NOFORMAT, NOINIT, SKIP, NOREWIND, STATS=10" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_full_backup.log"
+        sqlcmd -S $MSSQL_CONN_STRING -U $MSSQL_USER -P $MSSQL_PASS -Q "BACKUP DATABASE [$DB] TO DISK = N'$BACKUP_DIR/$FILE_NAME.bak' WITH NOFORMAT, NOINIT, SKIP, NOREWIND, STATS=10" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_full_backup.log"
         Compress-7Zip -Path "$BACKUP_DIR/$FILE_NAME.bak" -ArchiveFileName "$FILE_NAME.zip" -OutputPath "$BACKUP_DIR" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_full_backup.log"
         Remove-Item "$BACKUP_DIR/$FILE_NAME.bak" | Out-Null
         # Sync to S3
@@ -127,6 +133,7 @@ if ($TYPE -eq "full"){
 elseif ($TYPE -eq "audit") {
     foreach ($DB in $DATABASES.Keys) {
         # Check if audit exists
+        $AUDIT_FOLDER = $AUDIT_BASE_FOLDER + "/Audit" + ($DB -replace "[ _-]")
         if (Test-Path $AUDIT_FOLDER) {
             # Get clean db name (replaces _, - and space with nothing)
             $CLEAN_DB_NAME = $DB -replace "[ _-]"
@@ -139,7 +146,7 @@ elseif ($TYPE -eq "audit") {
             # Get full backup directory path
             $BACKUP_DIR = Convert-Path $BACKUP_DIR
             # Zip and move audit folder
-            Compress-7Zip -Path $AUDIT_FOLDER -ArchiveFileName "$FILE_NAME.zip" -OutputPath "$BACKUP_DIR" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
+            Compress-7Zip -Path ($AUDIT_BASE_FOLDER + "/Audit" + ($DB -replace "[ _-]")) -ArchiveFileName "$FILE_NAME.zip" -OutputPath "$BACKUP_DIR" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
             # Sync to S3
             if ($DATABASES[$DB] -ne "" -and $SYNC_TO_S3) {
                 aws s3 sync $BACKUP_DIR "s3://${DATABASES[$DB]}" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
@@ -183,7 +190,7 @@ else {
         # Get full backup directory path
         $BACKUP_DIR = Convert-Path $BACKUP_DIR
         # Backup Database
-        sqlcmd -S $MSSQL_HOST,$MSSQL_PORT -U $MSSQL_USER -P $MSSQL_PASS -Q "BACKUP DATABASE [$DB] TO DISK = N'$BACKUP_DIR/$FILE_NAME.bak' WITH DIFFERENTIAL, NOFORMAT, NOINIT, SKIP, NOREWIND, STATS=10" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_diff_backup.log"
+        sqlcmd -S $MSSQL_CONN_STRING -U $MSSQL_USER -P $MSSQL_PASS -Q "BACKUP DATABASE [$DB] TO DISK = N'$BACKUP_DIR/$FILE_NAME.bak' WITH DIFFERENTIAL, NOFORMAT, NOINIT, SKIP, NOREWIND, STATS=10" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_diff_backup.log"
         Compress-7Zip -Path "$BACKUP_DIR/$FILE_NAME.bak" -ArchiveFileName "$FILE_NAME.zip" -OutputPath "$BACKUP_DIR" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_diff_backup.log"
         Remove-Item "$BACKUP_DIR/$FILE_NAME.bak" | Out-Null
         # Add log

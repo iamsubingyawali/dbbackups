@@ -80,7 +80,7 @@ New-Item -ItemType Directory -Path $BACKUP_BASE_DIR -Force | Out-Null
 New-Item -ItemType Directory -Path $LOG_BASE_DIR -Force | Out-Null
 
 # Functions to insert backup details to a remote database
-function Send-ToDatabase([string]$Name, [string]$FileName, [string]$FileSize, [string]$Type, [string]$Status, [string]$Message) {
+function Send-ToDatabase([string]$Name, [string]$FileName, [string]$FileSize, [string]$Type, [string]$Status, [string]$S3Path, [string]$Message) {
     if ($SEND_LOGS){
         # Remote database configurations - to send database backup records
         $MSSQL_REMOTE_HOST = "192.168.100.1"
@@ -90,7 +90,7 @@ function Send-ToDatabase([string]$Name, [string]$FileName, [string]$FileSize, [s
         $MSSQL_REMOTE_DB = "BACKUP_RECORDS"
         $MSSQL_REMOTE_TABLE = "LOCALBACKUP_RECORDS"
 
-        $QUERY = "INSERT INTO $MSSQL_REMOTE_TABLE(NAME, FILE_NAME, FILE_SIZE, TYPE, STATUS, MESSAGE) VALUES ('$Name', '$FileName', '$FileSize', '$Type', '$Status', '$Message')"
+        $QUERY = "INSERT INTO $MSSQL_REMOTE_TABLE(NAME, FILE_NAME, FILE_SIZE, TYPE, STATUS, S3_PATH, MESSAGE) VALUES ('$Name', '$FileName', '$FileSize', '$Type', '$Status', '$S3Path', '$Message')"
         sqlcmd -S $MSSQL_REMOTE_HOST,$MSSQL_REMOTE_PORT -U $MSSQL_REMOTE_USER -P $MSSQL_REMOTE_PASS -d $MSSQL_REMOTE_DB -Q $QUERY | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_backup_record.log"
 
         # Check exit status and add logs
@@ -120,6 +120,8 @@ if ($TYPE -eq "full"){
         $BACKUP_DIR = $BACKUP_BASE_DIR + "/" + "$CLEAN_DB_NAME/$DATE"
         # Set file name
         $FILE_NAME = "$CLEAN_DB_NAME" + "_FULL_" + $TIMESTAMP
+        # Get S3 bucket name
+        $S3_BUCKET_NAME = $DATABASES[$DB]
         # Create backup directory
         New-Item -ItemType Directory -Path $BACKUP_DIR -Force | Out-Null
         # Check exit status
@@ -127,7 +129,7 @@ if ($TYPE -eq "full"){
             # Add log
             "## $TIMESTAMP $DB Error: Could not create a backup directory." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_full_backup.log"
             # Send to database
-            Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "FULL" -Status "FAIL" -Message "Could not create a backup directory."
+            Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "FULL" -Status "FAIL" -S3Path $S3_BUCKET_NAME -Message "Could not create a backup directory."
             continue
         }
         # Get full backup directory path
@@ -139,7 +141,7 @@ if ($TYPE -eq "full"){
             # Add log
             "## $TIMESTAMP $DB Error: Could not perform a database backup. Please check your database and server configurations." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_full_backup.log"
             # Send to database
-            Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "FULL" -Status "FAIL" -Message "Could not perform a database backup. Please check your database and server configurations."
+            Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "FULL" -Status "FAIL" -S3Path $S3_BUCKET_NAME -Message "Could not perform a database backup. Please check your database and server configurations."
             continue
         }
         Compress-7Zip -Path "$BACKUP_DIR/$FILE_NAME.bak" -ArchiveFileName "$FILE_NAME.zip" -OutputPath "$BACKUP_DIR" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_full_backup.log"
@@ -148,7 +150,7 @@ if ($TYPE -eq "full"){
             # Add log
             "## $TIMESTAMP $DB Error: Could not perform a database backup. Please check your database and server configurations." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_full_backup.log"
             # Send to database
-            Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "FULL" -Status "FAIL" -Message "Could not perform a database backup. Please check your database and server configurations."
+            Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "FULL" -Status "FAIL" -S3Path $S3_BUCKET_NAME -Message "Could not perform a database backup. Please check your database and server configurations."
             continue
         }
         Remove-Item "$BACKUP_DIR/$FILE_NAME.bak" | Out-Null
@@ -157,11 +159,10 @@ if ($TYPE -eq "full"){
             # Add log
             "## $TIMESTAMP $DB Error: Could not perform a database backup. Please check your database and server configurations." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_full_backup.log"
             # Send to database
-            Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "FULL" -Status "FAIL" -Message "Could not perform a database backup. Please check your database and server configurations."
+            Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "FULL" -Status "FAIL" -S3Path $S3_BUCKET_NAME -Message "Could not perform a database backup. Please check your database and server configurations."
             continue
         }
         # Sync to S3
-        $S3_BUCKET_NAME = $DATABASES[$DB]
         if ($S3_BUCKET_NAME -ne "" -and $SYNC_TO_S3) {
             aws s3 sync $BACKUP_DIR "s3://$S3_BUCKET_NAME" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_full_backup.log"
             # Check exit status
@@ -169,7 +170,7 @@ if ($TYPE -eq "full"){
                 # Add log
                 "## $TIMESTAMP $DB Error: Could not upload backups to S3. Please check your AWS CLI and S3 bucket configurations." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_full_backup.log"
                 # Send to database
-                Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "FULL" -Status "FAIL" -Message "Could not upload backups to S3. Please check your AWS CLI and S3 bucket configurations."
+                Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "FULL" -Status "FAIL" -S3Path $S3_BUCKET_NAME -Message "Could not upload backups to S3. Please check your AWS CLI and S3 bucket configurations."
                 continue
             }
         }
@@ -182,7 +183,7 @@ if ($TYPE -eq "full"){
                 # Add log
                 "## $TIMESTAMP $DB Error: Could not upload backups to Google Drive. Please check your Google Drive and gdrive tool configurations." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_full_backup.log"
                 # Send to database
-                Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "FULL" -Status "FAIL" -Message "Could not upload backups to Google Drive. Please check your Google Drive and gdrive tool configurations."
+                Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "FULL" -Status "FAIL" -S3Path $S3_BUCKET_NAME -Message "Could not upload backups to Google Drive. Please check your Google Drive and gdrive tool configurations."
                 continue
             }
             # Check if folder exists in google drive
@@ -198,7 +199,7 @@ if ($TYPE -eq "full"){
                 # Add log
                 "## $TIMESTAMP $DB Error: Could not upload backups to Google Drive. Please check your Google Drive and gdrive tool configurations." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_full_backup.log"
                 # Send to database
-                Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "FULL" -Status "FAIL" -Message "Could not upload backups to Google Drive. Please check your Google Drive and gdrive tool configurations."
+                Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "FULL" -Status "FAIL" -S3Path $S3_BUCKET_NAME -Message "Could not upload backups to Google Drive. Please check your Google Drive and gdrive tool configurations."
                 continue
             }
         }
@@ -211,7 +212,7 @@ if ($TYPE -eq "full"){
         # Get backup file size
         $BACKUP_SIZE = [Math]::Round(((Get-ChildItem $BACKUP_DIR/$FILE_NAME.zip).Length/1MB),2)
         # Call function to send backup details to database
-        Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize $BACKUP_SIZE"M" -Type "FULL" -Status "SUCCESS" -Message "Full backup successful for $DB."
+        Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize $BACKUP_SIZE"M" -Type "FULL" -Status "SUCCESS" -S3Path $S3_BUCKET_NAME -Message "Full backup successful for $DB."
     }
     # Remove old log texts
     Get-Content -Tail 4500 -Path "$LOG_BASE_DIR/mssql_full_backup.log" | Set-Content -Path "$LOG_BASE_DIR/tempfull.log"
@@ -228,6 +229,8 @@ elseif ($TYPE -eq "audit") {
             $BACKUP_DIR = $BACKUP_BASE_DIR + "/" + "$CLEAN_DB_NAME/$DATE"
             # Set file name
             $FILE_NAME = "$CLEAN_DB_NAME" + "_AUDIT_" + $TIMESTAMP
+            # Get S3 bucket name
+            $S3_BUCKET_NAME = $DATABASES[$DB]
             # Create backup directory
             New-Item -ItemType Directory -Path $BACKUP_DIR -Force | Out-Null
             # Check exit status
@@ -235,7 +238,7 @@ elseif ($TYPE -eq "audit") {
                 # Add log
                 "## $TIMESTAMP $DB Error: Could not create a backup directory." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
                 # Send to database
-                Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "AUDIT" -Status "FAIL" -Message "Could not create a backup directory."
+                Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "AUDIT" -Status "FAIL" -S3Path $S3_BUCKET_NAME -Message "Could not create a backup directory."
                 continue
             }
             # Get full backup directory path
@@ -243,7 +246,6 @@ elseif ($TYPE -eq "audit") {
             # Zip and move audit folder
             Compress-7Zip -Path ($AUDIT_BASE_FOLDER + "/Audit" + ($DB -replace "[ _-]")) -ArchiveFileName "$FILE_NAME.zip" -OutputPath "$BACKUP_DIR" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
             # Sync to S3
-            $S3_BUCKET_NAME = $DATABASES[$DB]
             if ($S3_BUCKET_NAME -ne "" -and $SYNC_TO_S3) {
                 aws s3 sync $BACKUP_DIR "s3://$S3_BUCKET_NAME" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
                 # Check exit status
@@ -251,7 +253,7 @@ elseif ($TYPE -eq "audit") {
                     # Add log
                     "## $TIMESTAMP $DB Error: Could not upload backups to S3. Please check your AWS CLI and S3 bucket configurations." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
                     # Send to database
-                    Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "AUDIT" -Status "FAIL" -Message "Could not upload backups to S3. Please check your AWS CLI and S3 bucket configurations."
+                    Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "AUDIT" -Status "FAIL" -S3Path $S3_BUCKET_NAME -Message "Could not upload backups to S3. Please check your AWS CLI and S3 bucket configurations."
                     continue
                 }
             }
@@ -264,7 +266,7 @@ elseif ($TYPE -eq "audit") {
                     # Add log
                     "## $TIMESTAMP $DB Error: Could not upload backups to Google Drive. Please check your Google Drive and gdrive tool configurations." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
                     # Send to database
-                    Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "AUDIT" -Status "FAIL" -Message "Could not upload backups to Google Drive. Please check your Google Drive and gdrive tool configurations."
+                    Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "AUDIT" -Status "FAIL" -S3Path $S3_BUCKET_NAME -Message "Could not upload backups to Google Drive. Please check your Google Drive and gdrive tool configurations."
                     continue
                 }
                 # Check if folder exists in google drive
@@ -280,7 +282,7 @@ elseif ($TYPE -eq "audit") {
                     # Add log
                     "## $TIMESTAMP $DB Error: Could not upload backups to Google Drive. Please check your Google Drive and gdrive tool configurations." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
                     # Send to database
-                    Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "AUDIT" -Status "FAIL" -Message "Could not upload backups to Google Drive. Please check your Google Drive and gdrive tool configurations."
+                    Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "AUDIT" -Status "FAIL" -S3Path $S3_BUCKET_NAME -Message "Could not upload backups to Google Drive. Please check your Google Drive and gdrive tool configurations."
                     continue
                 }
             }
@@ -293,7 +295,7 @@ elseif ($TYPE -eq "audit") {
             # Get backup file size
             $BACKUP_SIZE = [Math]::Round(((Get-ChildItem $BACKUP_DIR/$FILE_NAME.zip).Length/1MB),2)
             # Call function to send backup details to database
-            Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize $BACKUP_SIZE"M" -Type "AUDIT" -Status "SUCCESS" -Message "Audit backup successful for $DB."
+            Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize $BACKUP_SIZE"M" -Type "AUDIT" -Status "SUCCESS" -S3Path $S3_BUCKET_NAME -Message "Audit backup successful for $DB."
         } else {
             "## $TIMESTAMP NO DATABASE AUDIT FOUND FOR $DB." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_audit_backup.log"
         }
@@ -310,6 +312,8 @@ else {
         $BACKUP_DIR = $BACKUP_BASE_DIR + "/" + "$CLEAN_DB_NAME/$DATE"
         # Set file name
         $FILE_NAME = "$CLEAN_DB_NAME" + "_DIFF_" + $TIMESTAMP
+        # Get S3 bucket name
+        $S3_BUCKET_NAME = $DATABASES[$DB]
         # Create backup directory
         New-Item -ItemType Directory -Path $BACKUP_DIR -Force | Out-Null
         # Check exit status
@@ -317,7 +321,7 @@ else {
             # Add log
             "## $TIMESTAMP $DB Error: Could not create a backup directory." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_diff_backup.log"
             # Send to database
-            Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "DIFF" -Status "FAIL" -Message "Could not create a backup directory."
+            Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "DIFF" -Status "FAIL" -S3Path $S3_BUCKET_NAME -Message "Could not create a backup directory."
             continue
         }
         # Get full backup directory path
@@ -329,7 +333,7 @@ else {
             # Add log
             "## $TIMESTAMP $DB Error: Could not perform a database backup. Please check your database and server configurations." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_diff_backup.log"
             # Send to database
-            Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "DIFF" -Status "FAIL" -Message "Could not perform a database backup. Please check your database and server configurations."
+            Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "DIFF" -Status "FAIL" -S3Path $S3_BUCKET_NAME -Message "Could not perform a database backup. Please check your database and server configurations."
             continue
         }
         Compress-7Zip -Path "$BACKUP_DIR/$FILE_NAME.bak" -ArchiveFileName "$FILE_NAME.zip" -OutputPath "$BACKUP_DIR" | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_diff_backup.log"
@@ -338,7 +342,7 @@ else {
             # Add log
             "## $TIMESTAMP $DB Error: Could not perform a database backup. Please check your database and server configurations." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_diff_backup.log"
             # Send to database
-            Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "DIFF" -Status "FAIL" -Message "Could not perform a database backup. Please check your database and server configurations."
+            Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "DIFF" -Status "FAIL" -S3Path $S3_BUCKET_NAME -Message "Could not perform a database backup. Please check your database and server configurations."
             continue
         }
         Remove-Item "$BACKUP_DIR/$FILE_NAME.bak" | Out-Null
@@ -347,7 +351,7 @@ else {
             # Add log
             "## $TIMESTAMP $DB Error: Could not perform a database backup. Please check your database and server configurations." | Out-File -Encoding "utf8" -Append "$LOG_BASE_DIR/mssql_diff_backup.log"
             # Send to database
-            Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "DIFF" -Status "FAIL" -Message "Could not perform a database backup. Please check your database and server configurations."
+            Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize "0" -Type "DIFF" -Status "FAIL" -S3Path $S3_BUCKET_NAME -Message "Could not perform a database backup. Please check your database and server configurations."
             continue
         }
         # Add log
@@ -359,7 +363,7 @@ else {
         # Get backup file size
         # $BACKUP_SIZE = [Math]::Round(((Get-ChildItem $BACKUP_DIR/$FILE_NAME.zip).Length/1MB),2)
         # Call function to send backup details to database
-        # Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize $BACKUP_SIZE"M" -Type "DIFF" -Status "SUCCESS" -Message "Differential backup successful for $DB."
+        # Send-ToDatabase -Name $DB -FileName $FILE_NAME -FileSize $BACKUP_SIZE"M" -Type "DIFF" -Status "SUCCESS" -S3Path $S3_BUCKET_NAME -Message "Differential backup successful for $DB."
     }
     # Remove old log texts
     Get-Content -Tail 4500 -Path "$LOG_BASE_DIR/mssql_diff_backup.log" | Set-Content -Path "$LOG_BASE_DIR/tempdiff.log"
